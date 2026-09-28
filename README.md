@@ -1,18 +1,16 @@
 # Tarot-SAM3
 
-Tarot-SAM3 is a training-free framework for explicit and implicit referring
-expression segmentation with SAM3.
+Tarot-SAM3 is a novel training-free framework built on dual-stage refinement,
+jointly refining MLLM-derived grounding cues and SAM3 mask predictions for
+precise, robust referring expression and reasoning segmentation with improved
+semantic alignment.
 
 ## Public release boundary
 
-This repository exposes the pipeline only through ERI candidate generation. It
-stops before the final best-mask vote and contains no Mask Self-Refinement (MSR)
-implementation. Consequently, the public code produces multiple candidate masks
-and does not produce a final segmentation prediction.
-
-- Reason mode returns the Text Top3 candidates followed by the FullDes candidate.
-- Refer mode returns the pre-consensus `masks_info`, including the selected
-  representative bbox candidate when one is available.
+To preserve anonymity during peer review, this public release stops at
+candidate-mask generation. It excludes final best-mask voting and subsequent
+mask refinement, and therefore produces multiple candidates rather than a final
+prediction. The complete final code will be released after paper acceptance.
 
 ## Python API
 
@@ -37,7 +35,7 @@ python tarot_sam3.py \
   --save_dir output
 ```
 
-Add `--reason_seg` for Reason mode. The command writes every candidate to:
+The command writes every candidate to:
 
 ```text
 output/candidate_masks/01_<candidate-id>.png
