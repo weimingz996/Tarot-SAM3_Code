@@ -1,0 +1,22 @@
+qwen:
+  base_url: ""
+  api_key: ""
+  model: "Qwen2.5-VL-7B-Instruct"
+
+sam3:
+  weight_path: "../Pretrained-Models/SAM3/sam3.pt"
+
+tarot_sam3:
+  Reason:
+    reason_sam_confidence: 0.6
+    refer_use_reference_masks: true
+    refer_use_ordinal_masks: true
+    refer_sam_confidence: 0.6
+    refer_max_reference_objects: 2
+    refer_target_name_max_words: 5
+
+  ERI:
+    refer_filter_bbox_iou_thresh: 0.3
+    refer_bbox_match_iou_thresh: 0.3
+    refer_variant_iou_threshold: 0.5
+    refer_reference_exact_copy_block_iou: 0.9
