@@ -7,10 +7,28 @@ semantic alignment.
 
 ## Public release boundary
 
-To preserve anonymity during peer review, this public release stops at
-candidate-mask generation. It excludes final best-mask voting and subsequent
-mask refinement, and therefore produces multiple candidates rather than a final
-prediction. The complete final code will be released after paper acceptance.
+Tarot-SAM3 is a fully training-free framework that requires no task-specific
+training or fine-tuning. To protect the novelty of the complete method while
+respecting the conference's double-blind anonymity requirements, this release
+includes only the candidate-mask generation module. The released module
+converts the input expression into complementary SAM3 prompts and produces
+multiple text- and bounding-box-based mask candidates:
+
+- **Full Description** preserves the complete target attributes and referential
+  relationships, providing comprehensive context for target localization.
+- **Short Query** retains the explicit target name and the most decisive
+  relational cue while removing redundant clauses, enabling concise and stable
+  grounding.
+- **Long Query** combines target attributes, spatial or functional
+  relationships, and reference-object context to support more precise
+  localization.
+- **Name Augmentation** generates target-preserving semantic and functional name
+  variants, improving alignment with SAM3's concept-level segmentation space.
+
+The unreleased modules perform consensus-based candidate voting and best-mask
+selection, construct DINOv3-guided point prompts, and apply Mask Self-Refining
+(MSR) to identify and correct under-segmentation or over-segmentation. The
+complete implementation will be released after paper acceptance.
 
 ## Python API
 
