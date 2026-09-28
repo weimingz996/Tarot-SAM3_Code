@@ -624,7 +624,7 @@ class TarotSAM3:
 
 if __name__ == "__main__":
     from src.utils import ExperimentLogger
-    from src.utils import load_config
+    from src.utils import load_config, save_candidate_masks
     import torch
     import shutil
     import argparse
@@ -658,4 +658,5 @@ if __name__ == "__main__":
     candidate_masks = tarot_sam3.process_image(
         image_path, query, reason_seg, logger, save_dir
     )
-    logger.log("MAIN", f"Generated {len(candidate_masks)} candidate masks.")
+    saved_paths = save_candidate_masks(candidate_masks, save_dir, logger)
+    logger.log("MAIN", f"Saved {len(saved_paths)} candidate masks.")

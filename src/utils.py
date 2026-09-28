@@ -21,6 +21,27 @@ def save_mask(mask, save_path):
     cv2.imwrite(save_path, mask)
 
 
+def save_candidate_masks(candidates, save_dir, logger):
+    output_dir = Path(save_dir) / "candidate_masks"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths = []
+    for index, candidate in enumerate(candidates, start=1):
+        mask = np.asarray(candidate["mask"], dtype=bool)
+        candidate_id = re.sub(
+            r"[^a-z0-9]+", "_", str(candidate.get("id", "")).lower()
+        ).strip("_") or "candidate"
+        filename = f"{index:02d}_{candidate_id}.png"
+        relative_path = Path("candidate_masks") / filename
+        save_mask(mask, output_dir / filename)
+        logger.log(
+            "Candidate Mask",
+            f"id={candidate.get('id')}, source={candidate.get('source')}, "
+            f"pixels={int(mask.sum())}, path={relative_path.as_posix()}",
+        )
+        saved_paths.append(relative_path.as_posix())
+    return saved_paths
+
+
 def _normalize_visual_mask(mask, shape):
     value = np.asarray(mask).squeeze().astype(bool)
     if value.shape != tuple(shape):
