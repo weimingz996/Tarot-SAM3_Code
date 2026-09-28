@@ -66,6 +66,19 @@ def bbox_match_iou(mask, input_bbox) -> float:
     return intersection / union if union else 0.0
 
 
+def filter_candidates_by_bboxes(masks_info, bboxes, bbox_iou_thresh):
+    filtered = filter_masks_by_bboxes(
+        masks_info, bboxes, bbox_iou_thresh=bbox_iou_thresh
+    )
+    return [
+        candidate
+        for candidate in masks_info
+        if candidate.get("mask") is None
+        or not np.any(candidate["mask"])
+        or any(candidate is kept for kept in filtered)
+    ]
+
+
 class TarotSAM3:
     reasonseg_candidate_runner = staticmethod(run_reasonseg_candidate_flow)
 
@@ -279,24 +292,25 @@ class TarotSAM3:
             }
             for candidate in candidates
         }
-        voters = [
-            candidate
-            for candidate in text_candidates
-            if candidate.get("prompt_index", -1) >= 2
-            and candidate.get("fused_mask_info") is None
-        ]
-        text_masks = [candidate["mask"] for candidate in voters]
-        text_metadata = [
-            {
-                "prompt_index": candidate["prompt_index"],
-                "confidence": float(candidate.get("conf", 0.0)),
-                "mask_sha256": hashlib.sha256(
-                    np.packbits(np.asarray(candidate["mask"], dtype=bool))
-                    .tobytes()
-                ).hexdigest(),
-            }
-            for candidate in voters
-        ]
+        text_masks = []
+        text_metadata = []
+        for candidate in text_candidates:
+            if candidate.get("prompt_index", -1) < 2:
+                continue
+            raw_masks_info = candidate.get("raw_masks_info")
+            voters = [candidate] if raw_masks_info is None else raw_masks_info
+            for voter in voters:
+                mask = np.asarray(voter.get("mask"), dtype=bool)
+                if not np.any(mask):
+                    continue
+                text_masks.append(mask)
+                text_metadata.append({
+                    "prompt_index": candidate["prompt_index"],
+                    "confidence": float(voter.get("conf", 0.0)),
+                    "mask_sha256": hashlib.sha256(
+                        np.packbits(mask).tobytes()
+                    ).hexdigest(),
+                })
         selected, mask, _ = select_bbox_mask(
             boxes, text_masks, text_metadata, box_metadata
         )
@@ -417,20 +431,13 @@ class TarotSAM3:
                 **bbox_arrays,
             )
 
-        filtered = filter_masks_by_bboxes(
+        return filter_candidates_by_bboxes(
             masks_info,
             bboxes,
             bbox_iou_thresh=(
                 self.cfg.tarot_sam3.ERI.refer_filter_bbox_iou_thresh
             ),
         )
-        return [
-            candidate
-            for candidate in masks_info
-            if candidate.get("mask") is None
-            or not np.any(candidate["mask"])
-            or any(candidate is kept for kept in filtered)
-        ]
 
 
 
@@ -495,7 +502,7 @@ class TarotSAM3:
                     extract_bbox_from_mask(bbox_mask), dtype=int
                 )
                 filter_bboxes.append(self.full_des_bbox)
-                masks_info = filter_masks_by_bboxes(
+                masks_info = filter_candidates_by_bboxes(
                     masks_info,
                     filter_bboxes,
                     bbox_iou_thresh=(

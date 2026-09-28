@@ -115,14 +115,23 @@ class CandidateOnlyPipelineTests(unittest.TestCase):
 
     def test_refer_interpreter_returns_prevote_masks_info(self):
         text_mask = np.array([[True, False], [False, False]])
+        empty_mask = np.zeros((2, 2), dtype=bool)
         raw_mask = np.array([[False, True], [False, False]])
         bbox_mask = np.array([[True, True], [False, False]])
-        text_records = [{
-            "id": "full_text_raw_0",
-            "source": "text",
-            "mask": text_mask,
-            "raw_masks_info": [{"mask": raw_mask, "conf": 0.5}],
-        }]
+        text_records = [
+            {
+                "id": "empty_text",
+                "source": "text",
+                "mask": empty_mask,
+                "raw_masks_info": [],
+            },
+            {
+                "id": "full_text",
+                "source": "text",
+                "mask": text_mask,
+                "raw_masks_info": [{"mask": raw_mask, "conf": 0.5}],
+            },
+        ]
         bbox_candidate = {
             "method": "full",
             "source": "bbox",
@@ -148,12 +157,61 @@ class CandidateOnlyPipelineTests(unittest.TestCase):
         model.target_scope = "whole_object"
         model.full_des_bbox = None
 
-        with patch.object(tarot, "filter_masks_by_bboxes", side_effect=lambda masks, *a, **k: masks):
+        with patch.object(
+            tarot,
+            "filter_masks_by_bboxes",
+            side_effect=lambda masks, *a, **k: [
+                candidate for candidate in masks if np.any(candidate["mask"])
+            ],
+        ):
             records = model.expression_reasoning_interpreter()
 
-        self.assertEqual([item["id"] for item in records], ["full_text_raw_0", "Best BBox"])
-        self.assertIs(records[0]["raw_masks_info"][0]["mask"], raw_mask)
-        self.assertTrue(np.array_equal(records[1]["mask"], bbox_mask))
+        self.assertEqual(
+            [item["id"] for item in records],
+            ["empty_text", "full_text", "Best BBox"],
+        )
+        self.assertIs(records[1]["raw_masks_info"][0]["mask"], raw_mask)
+        self.assertTrue(np.array_equal(records[2]["mask"], bbox_mask))
+
+    def test_bbox_representative_uses_each_nested_raw_mask(self):
+        first_raw = np.array([[True, False], [False, False]])
+        second_raw = np.array([[False, True], [False, False]])
+        parent = {
+            "id": "more_text_0",
+            "source": "text",
+            "prompt_index": 2,
+            "mask": np.logical_or(first_raw, second_raw),
+            "raw_masks_info": [
+                {"mask": first_raw, "conf": 0.6},
+                {"mask": second_raw, "conf": 0.7},
+            ],
+            "fused_mask_info": {"mask": np.logical_or(first_raw, second_raw)},
+        }
+        bbox_mask = np.ones((2, 2), dtype=bool)
+        bbox_candidates = [{
+            "method": "full",
+            "mask": bbox_mask,
+            "conf": 0.9,
+            "bbox_match_iou": 0.8,
+        }]
+        captured = {}
+
+        def select(boxes, text_masks, text_metadata, box_metadata):
+            captured["text_masks"] = text_masks
+            captured["text_metadata"] = text_metadata
+            return "full", bbox_mask, {}
+
+        model = _bare_model()
+        with patch.object(tarot, "select_bbox_mask", side_effect=select):
+            selected_mask, method = model._select_bbox_candidate(
+                bbox_candidates, [parent]
+            )
+
+        self.assertEqual(method, "full")
+        self.assertIs(selected_mask, bbox_mask)
+        self.assertEqual(len(captured["text_masks"]), 2)
+        self.assertTrue(np.array_equal(captured["text_masks"][0], first_raw))
+        self.assertTrue(np.array_equal(captured["text_masks"][1], second_raw))
 
     def test_refer_text_candidates_keep_parent_metadata_and_empty_mask(self):
         empty = np.zeros((2, 2), dtype=bool)
