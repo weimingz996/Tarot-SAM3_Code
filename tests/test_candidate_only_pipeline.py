@@ -19,16 +19,13 @@ def _load_tarot_module():
     builder.build_sam3_image_model = lambda *args, **kwargs: None
     processor = types.ModuleType("sam3.model.sam3_image_processor")
     processor.Sam3Processor = object
-    with patch.dict(
-        sys.modules,
-        {
-            "sam3": sam3,
-            "sam3.model": sam3_model,
-            "sam3.model_builder": builder,
-            "sam3.model.sam3_image_processor": processor,
-        },
-    ):
-        import tarot_sam3
+    sys.modules.update({
+        "sam3": sam3,
+        "sam3.model": sam3_model,
+        "sam3.model_builder": builder,
+        "sam3.model.sam3_image_processor": processor,
+    })
+    import tarot_sam3
 
     return tarot_sam3
 

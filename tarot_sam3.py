@@ -1,40 +1,19 @@
 import hashlib
-import json
 from pathlib import Path
 from ref_prompt import description_variant_pipeline as ref_variants
 from ref_prompt import target_contract_prompts as ref_contract
 from ref_prompt import target_name_augmentation as ref_names
 from src.models import (
-    DINOv3Engine,
     QwenEngine,
     SAM3Engine,
-    extract_best_mask,
     filter_masks_by_bboxes,
-    mask_iou,
 )
 from src.prompts import reasoning_prompts
 from src.utils import (
     ExperimentLogger,
-    centroid_of_mask,
-    combine_matrices,
-    dilate_mask,
     extract_bbox_from_mask,
-    extract_dino_points,
-    find_negative_point,
-    get_comparator_result,
-    get_gate_score,
-    largest_comp_area,
-    mask_image,
-    resize_image,
-    sample_mask_points,
     save_full_long_short_bbox_board,
-    save_mask,
-    save_mask_and_point,
-    save_mask_grid,
-    save_point_on_image,
-    save_simi_map,
     split_phases,
-    visualize_dis_region,
 )
 from ref_prompt.full_description_pipeline import evaluate_one
 from ref_prompt.target_contract_prompts import (
@@ -46,7 +25,6 @@ from ref_prompt.training_free_bbox_selector import select_bbox_mask
 from reason_prompt.reasonseg_best_flow import VisionQwen, run_reasonseg_candidate_flow
 import os
 import numpy as np
-from typing import Tuple
 import cv2
 from PIL import Image, ImageOps
 
@@ -103,17 +81,9 @@ class TarotSAM3:
             temperature=0.0,
         )
         self.text_qwen = VisionQwen.from_qwen_config(cfg.qwen)
-        self.dino = DINOv3Engine(dinov3_location=cfg.dinov3.dinov3_location,
-                                 model_name=cfg.dinov3.model_name,
-                                 device=device,
-                                 weights=cfg.dinov3.weight_path)
         self.sam3 = SAM3Engine(ckpt_path=cfg.sam3.weight_path, device=device,
                                conf_thresh=cfg.tarot_sam3.Reason.refer_sam_confidence)
         self.logger = None
-        self.ERI_mask = None
-        self.sam3_points, self.sam3_labels = None, None
-        self.description_mask = None
-        self.dino_simi_map = None
         self.query = None
         self.target_scope = None
         self.full_description = None
@@ -122,7 +92,6 @@ class TarotSAM3:
         self.image = None
         self.save_dir = None
         self.reason_seg = False
-        self.sam3_point_mask = None
         self.visualize = False
 
     def _live_source(self):
@@ -590,213 +559,6 @@ class TarotSAM3:
             self.masks_info = masks_info
             return masks_info
 
-    def ERI_point_extractor(self, component_mask: np.ndarray, iter_str: str):
-        eri_cfg = self.cfg.tarot_sam3.ERI
-        prefix = "reason_" if self.reason_seg else "refer_"
-        mask_points = sample_mask_points(
-            component_mask,
-            getattr(eri_cfg, f"{prefix}sample_point_num"),
-            getattr(eri_cfg, f"{prefix}sample_point_strategy"),
-        )
-        if self.visualize:
-            save_point_on_image(self.image, mask_points,
-                                os.path.join(self.save_dir, f"sample_points_{iter_str}.png"))
-        dino_sim_maps = [self.dino.extract_cos_similarity(point) for point in mask_points]
-        self.dino_simi_map = combine_matrices(
-            dino_sim_maps,
-            method="harmonic_mean",
-        )
-        if self.visualize:
-            save_simi_map(self.dino_simi_map,
-                          os.path.join(self.save_dir, f"dino_simi_map_{iter_str}.png"))
-        if self.reason_seg:
-            dino_simi_points = extract_dino_points(self.dino_simi_map)
-        else:
-            dino_simi_points = extract_dino_points(self.dino_simi_map, self.full_des_bbox)
-        self.logger.log("ERI Point Extractor", f"DINO Positive Point: {dino_simi_points}")
-        negative_point = find_negative_point(self.dino_simi_map, dino_simi_points[0],
-                                             search_radius=1000,
-                                             threshold=0.3,
-                                             diff_threshold=0)
-        if negative_point is not None:
-            self.logger.log("ERI", f"DINO Negative Point: {list(negative_point)}")
-            points = np.concatenate([dino_simi_points, negative_point[None, :]], axis=0)
-            labels = np.array([1] * len(dino_simi_points) + [0])
-        else:
-            self.logger.log("ERI", "DINO Negative Point: None")
-            points = dino_simi_points
-            labels = np.ones(len(dino_simi_points))
-        self.sam3_points = points
-        self.sam3_labels = labels
-        sam3_masks = self.sam3.predict_point(points, labels)
-        self.sam3_point_mask = extract_best_mask(sam3_masks)
-        if self.visualize:
-            save_mask_and_point(self.image, self.sam3_point_mask,
-                                self.sam3_points,
-                                os.path.join(self.save_dir, f"sam3_point_mask_{iter_str}.png"),
-                                input_labels=self.sam3_labels)
-
-    def output_checker(self, mask: np.ndarray, iter_str: str) -> bool:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_file_1:
-            mask_image(self.image, mask, temp_file_1.name)
-            if self.reason_seg:
-                checker_prompt = reasoning_prompts["output_checker_reason"].format(
-                    Q=self.query,
-                    T_final=self.full_description,
-                )
-            else:
-                checker_prompt = reasoning_prompts["output_checker"].format(T_final=self.query)
-            check_result = self.qwen.generate(checker_prompt, [temp_file_1.name])
-        self.logger.log(f"Object Checker for {iter_str}", f"Check Result: '{check_result}'")
-        return get_gate_score(check_result) == 1
-
-    def mask_comparator(self, mask_1: np.ndarray, mask_2: np.ndarray, iter_str: str) -> Tuple[np.ndarray, int]:
-        if not np.any(mask_1):
-            self.logger.log(f"Mask Comparator for {iter_str}", "Winner: B")
-            return mask_2, 1
-        if not np.any(mask_2):
-            self.logger.log(f"Mask Comparator for {iter_str}", "Winner: A")
-            return mask_1, 0
-        if np.all(mask_1 == mask_2):
-            self.logger.log(f"Mask Comparator for {iter_str}", "Winner: A")
-            return mask_1, 0
-        if mask_iou(mask_1, mask_2) > 0.8:
-            if mask_1.sum() < mask_2.sum():
-                self.logger.log(f"Mask Comparator for {iter_str}", "Winner: A")
-                return mask_1, 0
-            else:
-                self.logger.log(f"Mask Comparator for {iter_str}", "Winner: B")
-                return mask_2, 1
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_file_1, tempfile.NamedTemporaryFile(
-                suffix=".png", delete=True) as temp_file_2:
-            mask_image(self.image, mask_1, temp_file_1.name)
-            mask_image(self.image, mask_2, temp_file_2.name)
-            if self.reason_seg:
-                resize_image(temp_file_1.name, temp_file_1.name)
-                resize_image(temp_file_2.name, temp_file_2.name)
-            compare_prompt = reasoning_prompts["mask_comparator"].format(Q=self.full_description)
-            response = self.qwen.generate(compare_prompt, [temp_file_1.name,
-                                                           temp_file_2.name])
-        winner = "A" if get_comparator_result(response) == "a" else "B"
-        self.logger.log(f"Mask Comparator for {iter_str}",
-                        f"Winner: {winner} Comparator Response: {response}")
-        if winner == "A":
-            return mask_1, 0
-        return mask_2, 1
-
-
-    def extract_point_under(self, cur_mask: np.ndarray, point_mask: np.ndarray, point_simi_map: np.ndarray,
-                            iter_str: str):
-        point_dis_region = ~cur_mask & point_mask
-        if not point_dis_region.any():
-            return False, None, None
-        point_simi_thresh = point_simi_map[point_dis_region].min()
-        part_mask = point_dis_region | ((point_simi_map > point_simi_thresh) & cur_mask)
-        if self.visualize:
-            save_path = os.path.join(self.save_dir, f"under_part_mask_{iter_str}.png")
-            save_mask(part_mask, save_path)
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_file_1:
-            mask_image(self.image, part_mask, temp_file_1.name)
-            if self.reason_seg:
-                checker_prompt = reasoning_prompts["reason_part_checker"].format(Q=self.query, T=self.full_description)
-            else:
-                checker_prompt = reasoning_prompts["part_checker"].format(Q=self.full_description)
-            check_result = self.qwen.generate(checker_prompt, [temp_file_1.name])
-        self.logger.log(f"Under Checker for Point Mask of {iter_str}", f"Check Result: '{check_result}'")
-        if float(check_result) == 1.0:
-            new_point = centroid_of_mask(part_mask)[np.newaxis, :]
-            # new_mask_results = self.sam3.predict_point(new_point, np.array([1]))
-            # new_mask = extract_best_mask(new_mask_results)
-            # new_point = centroid_of_mask(new_mask)[np.newaxis, :]
-            return True, new_point, np.array([1])
-        else:
-            return False, None, None
-
-    def extract_point_over(self, cur_mask: np.ndarray, point_mask: np.ndarray, cur_simi_map: np.ndarray, iter_str: str):
-        cur_dis_region = cur_mask & ~point_mask
-        prefix = "reason_" if self.reason_seg else "refer_"
-        simi_thresh = max(
-            cur_simi_map[cur_dis_region].min(),
-            getattr(self.cfg.tarot_sam3.MSR, f"{prefix}simi_thresh"),
-        )
-        part_mask = (~(cur_mask & point_mask)) & (cur_simi_map > simi_thresh)
-        if self.visualize:
-            save_path = os.path.join(self.save_dir, f"over_part_mask_{iter_str}.png")
-            save_mask(part_mask, save_path)
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_file_1:
-            mask_image(self.image, part_mask, temp_file_1.name)
-            if self.reason_seg:
-                checker_prompt = reasoning_prompts["reason_part_checker"].format(
-                    Q=self.query, T=self.full_description
-                )
-            else:
-                checker_prompt = reasoning_prompts["part_checker"].format(Q=self.full_description)
-            check_result = self.qwen.generate(checker_prompt, [temp_file_1.name])
-        check_result = 1 - float(check_result)
-        self.logger.log(f"Over Checker for Cur Mask of {iter_str}", f"Check Result: '{check_result}'")
-        if check_result == 1.0:
-            new_point = centroid_of_mask(part_mask)[np.newaxis, :]
-            # new_mask_results = self.sam3.predict_point(centroid, np.array([1]))
-            # new_mask = extract_best_mask(new_mask_results)
-            # new_point = centroid_of_mask(new_mask)[np.newaxis, :]
-            return True, new_point, np.array([0])
-        else:
-            return False, None, None
-
-    def mask_self_refine(self, cur_mask: np.ndarray, iter_str: str) -> np.ndarray:
-        refer_mask = self.sam3_point_mask
-        inter_mask = refer_mask & cur_mask
-        cur_dis_region = cur_mask & ~inter_mask
-        point_dis_region = refer_mask & ~inter_mask
-
-        if not inter_mask.any():
-            return self.get_empty_mask()
-        try:
-            cur_dis_point = centroid_of_mask(cur_dis_region)
-            sam3_dis_point = centroid_of_mask(point_dis_region)
-        except:
-            return cur_mask
-        cur_dis_simi_map = self.dino.extract_cos_similarity(cur_dis_point)
-        sam3_dis_simi_map = self.dino.extract_cos_similarity(sam3_dis_point)
-        if self.visualize:
-            visualize_dis_region(self.image,
-                                 cur_dis_region, point_dis_region,
-                                 [cur_dis_simi_map, sam3_dis_simi_map],
-                                 os.path.join(self.save_dir, f"dis_region_{iter_str}.png"))
-        if not self.reason_seg and not (
-            largest_comp_area(cur_dis_region)
-            > self.cfg.tarot_sam3.MSR.refer_comp_area_thresh
-            or largest_comp_area(point_dis_region)
-            > self.cfg.tarot_sam3.MSR.refer_comp_area_thresh
-        ):
-            return cur_mask
-        if_under, new_point, new_label = self.extract_point_under(cur_mask, refer_mask, sam3_dis_simi_map, iter_str)
-        if if_under:
-            self.sam3_points = np.concatenate((self.sam3_points, new_point))
-            self.sam3_labels = np.concatenate((self.sam3_labels, new_label))
-            self.logger.log(f"{iter_str}", f"Extracted New Positive Point: {new_point}")
-            masks_info = self.sam3.predict_point(self.sam3_points, self.sam3_labels)
-            new_mask = extract_best_mask(masks_info)
-            if self.visualize:
-                save_mask_and_point(self.image, new_mask, self.sam3_points,
-                                    os.path.join(self.save_dir, f"refined_mask_iter_{iter_str}.png"),
-                                    input_labels=self.sam3_labels)
-            return new_mask
-        if_over, new_point, new_label = self.extract_point_over(cur_mask, refer_mask, cur_dis_simi_map, iter_str)
-        if if_over:
-            self.sam3_points = np.concatenate((self.sam3_points, new_point))
-            self.sam3_labels = np.concatenate((self.sam3_labels, new_label))
-            self.logger.log(f"{iter_str}", f"Extracted New Negative Point: {new_point}")
-            masks_info = self.sam3.predict_point(self.sam3_points, self.sam3_labels)
-            new_mask = extract_best_mask(masks_info)
-            if self.visualize:
-                save_mask_and_point(self.image, new_mask, self.sam3_points,
-                                    os.path.join(self.save_dir, f"refined_mask_iter_{iter_str}.png"),
-                                    input_labels=self.sam3_labels)
-            return new_mask
-        else:
-            return cur_mask
-
     def process_image(self, image_path: str, query: str, reason_seg: bool,
                       logger: ExperimentLogger, save_dir: str, visualize: bool = True):
         self.logger = logger
@@ -893,7 +655,7 @@ if __name__ == "__main__":
     os.makedirs(save_dir)
     logger = ExperimentLogger(log_dir=save_dir, fname=save_dir, resume=False)
 
-    output_mask = tarot_sam3.process_image(image_path, query, reason_seg, logger, save_dir)
-    output_mask_path = os.path.join(save_dir, "final_output_mask.png")
-    save_mask(output_mask, output_mask_path)
-    logger.log("MAIN", f"Final Output Mask saved at: '{output_mask_path}'")
+    candidate_masks = tarot_sam3.process_image(
+        image_path, query, reason_seg, logger, save_dir
+    )
+    logger.log("MAIN", f"Generated {len(candidate_masks)} candidate masks.")
