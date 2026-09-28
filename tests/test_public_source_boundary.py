@@ -15,6 +15,11 @@ FORBIDDEN = (
     "def _consensus_winner(",
     "def ERI_point_extractor(",
     "def mask_self_refine(",
+    "def predict_point(",
+    "def extract_best_mask(",
+    "def save_mask_comparison_board(",
+    "def save_semantic_mask_views(",
+    "def save_absolute_mask_views(",
     "class DINOv3Engine",
     "final_output_mask.png",
 )

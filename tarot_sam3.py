@@ -128,27 +128,8 @@ class TarotSAM3:
             sam_confidence=float(reason_cfg.refer_sam_confidence),
         )
 
-    def _full_v4_fallback(self, error):
-        self.logger.log("Full V4", f"live generation unavailable: {error}")
-        return {
-            "identity_accepted": False,
-            "target": {
-                "target_name": "object",
-                "target_scope": "whole_object",
-                "selector_scope": None,
-                "source": "fallback",
-            },
-            "descriptions": {"v4_full": self.query},
-            "bbox": {"v4_full": None},
-            "selection_route": None,
-            "error": str(error),
-        }
-
     def ref_reasoning_prompt(self):
-        try:
-            row = self._run_full_v4_live()
-        except Exception as exc:
-            row = self._full_v4_fallback(exc)
+        row = self._run_full_v4_live()
 
         full_description = row["descriptions"].get("v4_full") or self.query
         target = row.get("target") or {}
@@ -222,18 +203,14 @@ class TarotSAM3:
         }
         if full["bbox"] is None:
             return {**empty, "error": "Full V4 bbox unavailable"}
-        try:
-            return evaluate(
-                self.qwen,
-                lambda: self.sam3,
-                self.image,
-                float(self.cfg.tarot_sam3.Reason.refer_sam_confidence),
-                row,
-                sl_version="v2",
-            )
-        except Exception as exc:
-            self.logger.log("Full-SL V2", f"live generation unavailable: {exc}")
-            return {**empty, "error": str(exc)}
+        return evaluate(
+            self.qwen,
+            lambda: self.sam3,
+            self.image,
+            float(self.cfg.tarot_sam3.Reason.refer_sam_confidence),
+            row,
+            sl_version="v2",
+        )
 
 
     def _generate_bbox_candidates(self, bboxes):
@@ -346,7 +323,7 @@ class TarotSAM3:
             ),
             "prompt_index": 1,
         }]
-        descriptions = set(self.full_description)
+        descriptions = {self.full_description}
         for index, description in enumerate([self.full_description] + expressions):
             id = f"more_text_{index}"
             for _ in range(3):
@@ -440,48 +417,20 @@ class TarotSAM3:
                 **bbox_arrays,
             )
 
-        candidates = []
-        for mask_info in masks_info:
-            branch = mask_info["id"]
-            raw_masks_info = mask_info.get("raw_masks_info")
-            if raw_masks_info is None:
-                candidates.append({**mask_info, "branch": branch})
-                continue
-            for raw_index, raw in enumerate(raw_masks_info):
-                raw_mask = np.asarray(raw["mask"]).astype(bool).squeeze()
-                if not np.any(raw_mask):
-                    continue
-                candidates.append({
-                    **mask_info,
-                    **raw,
-                    "id": f"{branch}_raw_{raw_index}",
-                    "branch": branch,
-                    "mask": raw_mask,
-                    "conf": float(raw.get("conf", 0.0)),
-                    "source": "text",
-                    "raw_masks_info": [],
-                    "fused_mask_info": None,
-                })
-            fused = mask_info.get("fused_mask_info")
-            if self.target_scope in {"collection", "group", "group_set"} and fused is not None:
-                union_mask = np.asarray(fused["mask"]).astype(bool).squeeze()
-                if np.any(union_mask):
-                    candidates.append({
-                        **mask_info,
-                        "id": f"{branch}_union",
-                        "branch": branch,
-                        "mask": union_mask,
-                        "conf": float(fused.get("conf", mask_info.get("conf", 0.0))),
-                        "source": "text",
-                    })
-
-        return filter_masks_by_bboxes(
-            candidates,
+        filtered = filter_masks_by_bboxes(
+            masks_info,
             bboxes,
             bbox_iou_thresh=(
                 self.cfg.tarot_sam3.ERI.refer_filter_bbox_iou_thresh
             ),
         )
+        return [
+            candidate
+            for candidate in masks_info
+            if candidate.get("mask") is None
+            or not np.any(candidate["mask"])
+            or any(candidate is kept for kept in filtered)
+        ]
 
 
 
@@ -560,7 +509,8 @@ class TarotSAM3:
             return masks_info
 
     def process_image(self, image_path: str, query: str, reason_seg: bool,
-                      logger: ExperimentLogger, save_dir: str, visualize: bool = True):
+                      logger: ExperimentLogger, save_dir: str,
+                      visualize: bool = True) -> list[dict]:
         self.logger = logger
         self.reason_seg = reason_seg
         mode = "reason" if self.reason_seg else "refer"

@@ -1,4 +1,4 @@
-from typing import Optional, List, Union, Dict, Any
+from typing import Optional, List, Dict, Any
 import base64
 import mimetypes
 import cv2
@@ -171,41 +171,6 @@ class SAM3Engine:
                 })
             return results
 
-    def predict_point(self, points: Union[List, np.ndarray], label: Optional[Union[List, np.ndarray]] = None
-                      ) -> List[Dict[str, Any]]:
-        if type(points) != np.ndarray:
-            points = np.array(points)
-        if points.ndim == 1:
-            points = np.expand_dims(points, axis=0)
-        if label is None:
-            label = np.ones(len(points))
-        else:
-            if type(label) != np.ndarray:
-                label = np.array(label)
-        self.processor.reset_all_prompts(self.inference_state)
-        mask_logits, scores, _ = self.model.predict_inst(
-            self.inference_state,
-            point_coords=points[:, [1, 0]],
-            point_labels=label,
-            multimask_output=True,
-            return_logits=True,
-        )
-        results = []
-        masks_np, scores_np = mask_logits > 0, scores
-        stability_scores = self._stability_scores(mask_logits, threshold=0.0)
-
-        for i in range(len(scores_np)):
-            m, s = masks_np[i], float(scores_np[i])
-            # if s < self.conf_thresh:
-            #     continue
-            results.append({
-                'mask': m,
-                'conf': s,
-                'stability_score': float(stability_scores[i]),
-                'source': 'point',
-            })
-        return results
-
     def predict_box(self, box: List[int]) -> List[Dict[str, Any]]:
         width, height = self.image_pil.size
         self.processor.reset_all_prompts(self.inference_state)
@@ -285,18 +250,6 @@ def nms_masks(
                 suppressed[j] = True
     keep_sorted_by_input = sorted(keep)
     return [dets[k] for k in keep_sorted_by_input]
-
-def extract_best_mask(sam_results):
-    best_conf = 0
-    best_mask = None
-    for result in sam_results:
-        if result['conf'] > best_conf:
-            best_conf = result['conf']
-            best_mask = result['mask']
-    return best_mask
-
-
-
 
 def filter_masks_by_bboxes(masks_info: List[Dict], bboxes: List, bbox_iou_thresh: float = 0.5):
     if len(bboxes) == 0:

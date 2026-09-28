@@ -74,19 +74,6 @@ def save_labeled_mask_overlay(image, mask, label, output_path, color):
     merged.convert("RGB").save(output_path, quality=92)
 
 
-def _labeled_cv_panel(body, label, header):
-    height, width = body.shape[:2]
-    value = np.zeros((height + header, width, 3), dtype=np.uint8)
-    value[header:] = body
-    y = 32 if header == 48 else 41
-    scale = 0.55 if header == 48 else 0.62
-    cv2.putText(
-        value, label, (12, y), cv2.FONT_HERSHEY_SIMPLEX,
-        scale, (255, 255, 255), 2, cv2.LINE_AA,
-    )
-    return value
-
-
 def save_full_long_short_bbox_board(image, bboxes, output_path):
     image = _visual_bgr_image(image)
     height, width = image.shape[:2]
@@ -124,86 +111,6 @@ def save_full_long_short_bbox_board(image, bboxes, output_path):
     if not cv2.imwrite(str(output_path), np.hstack(panels)):
         raise RuntimeError(f"failed to write bbox board: {output_path}")
     return output_path
-
-
-def save_mask_comparison_board(image, baseline_mask, proposal_mask, output_path):
-    image = _visual_bgr_image(image).copy()
-    shape = image.shape[:2]
-    baseline = _normalize_visual_mask(baseline_mask, shape)
-    proposal = _normalize_visual_mask(proposal_mask, shape)
-
-    def cutout(mask):
-        value = np.zeros_like(image)
-        value[mask] = image[mask]
-        return value
-
-    common = np.logical_and(baseline, proposal)
-    baseline_only = np.logical_and(baseline, np.logical_not(proposal))
-    proposal_only = np.logical_and(proposal, np.logical_not(baseline))
-    top = np.hstack([
-        _labeled_cv_panel(image, "ORIGINAL", 48),
-        _labeled_cv_panel(cutout(baseline), "BASELINE MASK", 48),
-        _labeled_cv_panel(cutout(proposal), "PROPOSAL MASK", 48),
-    ])
-    bottom = np.hstack([
-        _labeled_cv_panel(cutout(common), "COMMON PIXELS", 48),
-        _labeled_cv_panel(cutout(baseline_only), "REMOVED BY PROPOSAL", 48),
-        _labeled_cv_panel(cutout(proposal_only), "ADDED BY PROPOSAL", 48),
-    ])
-    if not cv2.imwrite(str(output_path), np.vstack([top, bottom])):
-        raise RuntimeError(f"failed to write temporary board: {output_path}")
-
-
-
-
-def _semantic_mask_bodies(image, mask):
-    outline = image.copy()
-    contours, _ = cv2.findContours(
-        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-    cv2.drawContours(outline, contours, -1, (255, 255, 0), 3, cv2.LINE_AA)
-    cutout = np.zeros_like(image)
-    cutout[mask] = image[mask]
-    return outline, cutout
-
-
-def save_semantic_mask_views(image, baseline_mask, proposal_mask, output_dir):
-    image = _visual_bgr_image(image).copy()
-    output_dir = Path(output_dir)
-    paths = []
-    for mask, prefix in (
-        (_normalize_visual_mask(baseline_mask, image.shape[:2]), "BASELINE"),
-        (_normalize_visual_mask(proposal_mask, image.shape[:2]), "PROPOSAL"),
-    ):
-        outline, cutout = _semantic_mask_bodies(image, mask)
-        for suffix, body, label in (
-            ("outline", outline, f"{prefix}: EXACT MASK OUTLINE ON ORIGINAL"),
-            ("cutout", cutout, f"{prefix}: SAME-COORDINATE BLACK CUTOUT"),
-        ):
-            target = output_dir / f"{prefix.lower()}_{suffix}.png"
-            if not cv2.imwrite(str(target), _labeled_cv_panel(body, label, 64)):
-                raise RuntimeError(f"failed to write temporary view: {target}")
-            paths.append(str(target))
-            cv2.imwrite(f"{prefix.lower()}_{suffix}.png", _labeled_cv_panel(body, label, 64))
-    return paths
-
-
-def save_absolute_mask_views(image, candidate_mask, output_dir):
-    image = _visual_bgr_image(image).copy()
-    mask = _normalize_visual_mask(candidate_mask, image.shape[:2])
-    outline, cutout = _semantic_mask_bodies(image, mask)
-    panels = (
-        ("image_1_original.png", image, "IMAGE 1: ORIGINAL"),
-        ("image_2_outline.png", outline, "IMAGE 2: EXACT CANDIDATE MASK CONTOUR"),
-        ("image_3_cutout.png", cutout, "IMAGE 3: SAME-COORDINATE BLACK CUTOUT"),
-    )
-    paths = []
-    for filename, body, label in panels:
-        target = Path(output_dir) / filename
-        if not cv2.imwrite(str(target), _labeled_cv_panel(body, label, 64)):
-            raise RuntimeError(f"failed to write temporary view: {target}")
-        paths.append(str(target))
-    return paths
 
 
 def save_target_candidate_views(

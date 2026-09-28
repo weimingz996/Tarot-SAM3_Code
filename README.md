@@ -48,6 +48,14 @@ output/candidate_masks/02_<candidate-id>.png
 Candidate IDs are lowercased and sanitized for filenames. The numeric prefix
 preserves order and uniqueness. No `final_output_mask.png` is created.
 
+## SAM3 dependency
+
+This repository does not vendor the third-party SAM3 implementation, model
+weights, or tokenizer vocabulary. Install the official SAM3 source package so
+that `sam3.model_builder` and `sam3.model.sam3_image_processor` are importable.
+The installed package must include `sam3/assets/bpe_simple_vocab_16e6.txt.gz`.
+Set `sam3.weight_path` in `configs/7B.yaml` to the downloaded checkpoint.
+
 ## Reference environment
 
 The versions below were read from the server environment at

@@ -155,6 +155,75 @@ class CandidateOnlyPipelineTests(unittest.TestCase):
         self.assertIs(records[0]["raw_masks_info"][0]["mask"], raw_mask)
         self.assertTrue(np.array_equal(records[1]["mask"], bbox_mask))
 
+    def test_refer_text_candidates_keep_parent_metadata_and_empty_mask(self):
+        empty = np.zeros((2, 2), dtype=bool)
+        nonempty = np.array([[True, False], [False, False]])
+        raw = {"mask": nonempty, "conf": 0.7}
+        mask_records = iter([
+            {"id": "full_text", "source": "text", "mask": empty,
+             "raw_masks_info": [], "conf": 0.0},
+            {"id": "more_text_0", "source": "text", "mask": empty,
+             "raw_masks_info": [], "conf": 0.0},
+            {"id": "more_text_0", "source": "text", "mask": nonempty,
+             "raw_masks_info": [raw], "conf": 0.7},
+        ])
+        generated_prompts = []
+        generated_text = iter(["", "the crimson cup"])
+        model = _bare_model()
+        model.reason_seg = False
+        model.visualize = False
+        model.image = np.zeros((2, 2, 3), dtype=np.uint8)
+        model.logger = FakeLogger()
+        model.query = "the red cup"
+        model.full_description = "red cup"
+        model.target_entity = "cup"
+        model.target_scope = "whole_object"
+        model.description_mask_extractor = (
+            lambda description, candidate_id, return_info=False: next(mask_records)
+        )
+
+        def generate(prompt):
+            generated_prompts.append(prompt)
+            return next(generated_text)
+
+        model.qwen.generate = generate
+        with (
+            patch.object(tarot, "generate_target_name_candidates", return_value=["cup"]),
+            patch.object(tarot, "split_phases", return_value=[]),
+            patch.object(
+                tarot,
+                "filter_masks_by_bboxes",
+                side_effect=lambda records, *args, **kwargs: [
+                    record for record in records if np.any(record["mask"])
+                ],
+            ),
+        ):
+            records = model._initial_text_candidates([[0, 0, 2, 2]])
+
+        self.assertEqual([record["id"] for record in records], ["full_text", "more_text_0"])
+        self.assertFalse(np.any(records[0]["mask"]))
+        self.assertIs(records[1]["raw_masks_info"][0], raw)
+        self.assertIn("{'red cup'}", generated_prompts[-1])
+
+    def test_refer_generation_errors_propagate(self):
+        model = _bare_model()
+        model.logger = FakeLogger()
+        model.query = "the cup"
+        model._run_full_v4_live = lambda: (_ for _ in ()).throw(
+            RuntimeError("full-v4 failed")
+        )
+        with self.assertRaisesRegex(RuntimeError, "full-v4 failed"):
+            model.ref_reasoning_prompt()
+
+        model._full_v4_row = {
+            "descriptions": {"v4_full": "red cup"},
+            "bbox": {"v4_full": [0, 0, 2, 2]},
+        }
+        model.image = np.zeros((2, 2, 3), dtype=np.uint8)
+        with patch.object(tarot, "evaluate", side_effect=RuntimeError("full-sl failed")):
+            with self.assertRaisesRegex(RuntimeError, "full-sl failed"):
+                model._run_full_sl_v2_live()
+
     def test_refer_process_returns_empty_candidate_list(self):
         model = _bare_model()
         model.ref_reasoning_prompt = lambda: None
