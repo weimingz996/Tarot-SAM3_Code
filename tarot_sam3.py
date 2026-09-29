@@ -586,15 +586,15 @@ if __name__ == "__main__":
     import shutil
     import argparse
 
-    parser = argparse.ArgumentParser(description="Tarot-SAM3 单图推理")
-    parser.add_argument("--config", type=str, default="configs/7B.yaml", help="配置文件路径（YAML）")
+    parser = argparse.ArgumentParser(description="Tarot-SAM3 single-image inference")
+    parser.add_argument("--config", type=str, default="configs/7B.yaml", help="Path to the configuration file (YAML)")
     parser.add_argument("--image_path", type=str, default="test-images/12548840825_70c715e3e3_o.jpg",
-                        help="输入图像路径")
+                        help="Path to the input image")
     parser.add_argument("--query", type=str,
                         default="In cold weather, dogs may need extra protection to keep them warm. What object in the picture can a dog wear to provide warmth during snowy walks?",
-                        help="指代/描述文本")
-    parser.add_argument("--save_dir", type=str, default=None, help="结果保存目录，默认与图像名一致")
-    parser.add_argument("--reason_seg", action="store_true", help="是否使用 ReasonSeg 推理模式")
+                        help="Referring expression or description")
+    parser.add_argument("--save_dir", type=str, default=None, help="Directory for saving results; defaults to the image name")
+    parser.add_argument("--reason_seg", action="store_true", help="Use ReasonSeg inference mode")
     args = parser.parse_args()
 
     cfg = load_config(args.config)

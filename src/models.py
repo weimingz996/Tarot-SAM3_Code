@@ -210,8 +210,8 @@ class SAM3Engine:
 
 def mask_iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
     """
-    计算两个二值 mask 的 IoU。
-    mask_*: bool 或 0/1 ndarray，形状一致
+    Compute the IoU of two binary masks.
+    mask_*: bool or 0/1 ndarrays with matching shapes
     """
     a = mask_a.astype(bool)
     b = mask_b.astype(bool)
