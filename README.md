@@ -5,6 +5,9 @@ jointly refining MLLM-derived grounding cues and SAM3 mask predictions for
 precise, robust referring expression and reasoning segmentation with improved
 semantic alignment.
 
+We welcome researchers and practitioners to try Tarot-SAM3 and share their
+feedback.
+
 ## Public release boundary
 
 Tarot-SAM3 is a fully training-free framework that requires no task-specific
